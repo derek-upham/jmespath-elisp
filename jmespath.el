@@ -44,17 +44,12 @@
 ;;
 ;;   (jmespath-search
 ;;     "locations[?state == 'WA'].name | sort(@) | {WashingtonCities: join(', ', @)}"
-;;     '((locations .
-;;                  [((name . "Seattle")
-;;                    (state . "WA"))
-;;                   ((name . "New York")
-;;                    (state . "NY"))
-;;                   ((name . "Bellevue")
-;;                    (state . "WA"))
-;;                   ((name . "Olympia")
-;;                    (state . "WA"))]))P
-;;       ⇒ ((WashingtonCities . "Bellevue, Olympia, Seattle"))
-
+;;     (json-parse-string "{\"locations\": [{\"name\": \"Seattle\", \"state\": \"WA\"},
+;;                                          {\"name\": \"New York\", \"state\": \"NY\"},
+;;                                          {\"name\": \"Bellevue\", \"state\": \"WA\"},
+;;                                          {\"name\": \"Olympia\", \"state\": \"WA\"}]}"))
+;;       ⇒ #s(hash-table size 1 test equal rehash-size 1.5 rehash-threshold 0.8125
+;;                       data ("WashingtonCities" "Bellevue, Olympia, Seattle"))
 ;;
 ;; `jmespath-search' parses the query on the fly from the printed
 ;; representation.  Use `jmespath-compile-query' to parse the string
@@ -91,6 +86,16 @@
 ;; `jmespath-search'.
 
 ;;; Code:
+
+(jmespath-search
+ "locations[?state == 'WA'].name | sort(@) | {WashingtonCities: join(', ', @)}"
+ (json-parse-string "{\"locations\": [{\"name\": \"Seattle\", \"state\": \"WA\"},
+                                         {\"name\": \"New York\", \"state\": \"NY\"},
+                                         {\"name\": \"Bellevue\", \"state\": \"WA\"},
+                                         {\"name\": \"Olympia\", \"state\": \"WA\"}]}"))
+#s(hash-table size 1 test equal rehash-size 1.5 rehash-threshold 0.8125 data ("WashingtonCities" "Bellevue, Olympia, Seattle"))
+⇒ ((WashingtonCities . "Bellevue, Olympia, Seattle"))
+
 
 (require 'cl-lib)                       ; soooo much cl-lib...
 
