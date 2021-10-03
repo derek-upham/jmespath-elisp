@@ -129,8 +129,9 @@
 ;;; https://alhassy.github.io/TypedLisp.html
 ;;; Learn it.  Know it.  Live it.
 
-;;; First we define the JSON types.  Notice that objects are
-;;; association lists, not hash tables.
+;;; First we define the JSON types.  Notice that objects are hash
+;;; tables, not association lists.  Association lists are easier to
+;;; read, but they have O(n²) performance for some operations.
 
 (defun jmespath-json-null-p (thing)
   (eq :null thing))
@@ -797,7 +798,8 @@ same type."
            finally return current))
 
 ;; All of the implementing methods dispatch based on the first
-;; `opcode' argument.  This is a new feature in Emacs 28.
+;; `opcode' argument.  (All of these quote the argument, as the
+;; Emacs 28 NEWS file warns us.)
 (cl-defgeneric jmespath-linear-immediate (opcode opargs current))
 
 (cl-defmethod jmespath-linear-immediate ((_opcode (eql 'current-node)) _opargs current)
@@ -1401,7 +1403,7 @@ same type."
                 (list 'position (jmespath-token-position token)))))
 
 ;; We set up a custom query table so we can use `forward-sexp' to
-;; advance across quoted strings below.  The 
+;; advance across quoted strings below.
 (defconst jmespath-query-syntax-table
   (let ((table (make-syntax-table)))
     ;; Single-quotes indicate "raw" strings while backticks indicate
