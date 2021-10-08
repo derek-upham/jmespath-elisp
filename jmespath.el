@@ -87,15 +87,14 @@
 
 ;;; Code:
 
-(jmespath-search
- "locations[?state == 'WA'].name | sort(@) | {WashingtonCities: join(', ', @)}"
- (json-parse-string "{\"locations\": [{\"name\": \"Seattle\", \"state\": \"WA\"},
-                                         {\"name\": \"New York\", \"state\": \"NY\"},
-                                         {\"name\": \"Bellevue\", \"state\": \"WA\"},
-                                         {\"name\": \"Olympia\", \"state\": \"WA\"}]}"))
-#s(hash-table size 1 test equal rehash-size 1.5 rehash-threshold 0.8125 data ("WashingtonCities" "Bellevue, Olympia, Seattle"))
-⇒ ((WashingtonCities . "Bellevue, Olympia, Seattle"))
-
+;; (jmespath-search
+;;  "locations[?state == 'WA'].name | sort(@) | {WashingtonCities: join(', ', @)}"
+;;  (json-parse-string "{\"locations\": [{\"name\": \"Seattle\", \"state\": \"WA\"},
+;;                                          {\"name\": \"New York\", \"state\": \"NY\"},
+;;                                          {\"name\": \"Bellevue\", \"state\": \"WA\"},
+;;                                          {\"name\": \"Olympia\", \"state\": \"WA\"}]}"))
+;; #s(hash-table size 1 test equal rehash-size 1.5 rehash-threshold 0.8125 data ("WashingtonCities" "Bellevue, Olympia, Seattle"))
+;; ⇒ ((WashingtonCities . "Bellevue, Olympia, Seattle"))
 
 (require 'cl-lib)                       ; soooo much cl-lib...
 
@@ -1420,9 +1419,8 @@ same type."
     (with-temp-buffer
       (insert text)
       (goto-char (point-min))
-      (save-match-data
-        (while (search-forward "\\`" nil t)
-          (replace-match "`")))
+      (while (search-forward "\\`" nil t)
+        (replace-match "`"))
       (goto-char (point-min))
       (condition-case nil
           (jmespath-make-token (jmespath-token-tag-LITERAL)
@@ -1435,13 +1433,12 @@ same type."
                                                     (format "%s" text))))))))
 
 (defun jmespath-read-token-number (token-start)
-  (save-match-data
-    (if (re-search-forward "\\=-?[0-9]+" nil t)
-        (jmespath-make-token (jmespath-token-tag-NUMBER) token-start (string-to-number (match-string 0)))
-      (jmespath-parse-error "could not parse number"
-                            (jmespath-make-token (jmespath-token-tag-NUMBER)
-                                                 token-start
-                                                 nil)))))
+  (if (re-search-forward "\\=-?[0-9]+" nil t)
+      (jmespath-make-token (jmespath-token-tag-NUMBER) token-start (string-to-number (match-string 0)))
+    (jmespath-parse-error "could not parse number"
+                          (jmespath-make-token (jmespath-token-tag-NUMBER)
+                                               token-start
+                                               nil))))
 
 (defun jmespath-read-token-raw-string (token-start)
   ;; The spec ABNF suggests a difference between "preserved-escape"
@@ -1456,9 +1453,8 @@ same type."
     (with-temp-buffer
       (insert text)
       (goto-char (point-min))
-      (save-match-data
-        (while (search-forward "\\'" nil t)
-          (replace-match "'")))
+      (while (search-forward "\\'" nil t)
+        (replace-match "'"))
       (jmespath-make-token (jmespath-token-tag-RAWSTRING)
                            token-start
                            (buffer-string)))))
@@ -1477,9 +1473,8 @@ same type."
              (list (format-message "illegal JSON string starting at position %d" token-start))))))
 
 (defun jmespath-read-token-unquoted-string (token-start)
-  (save-match-data
-    (re-search-forward "\\=[A-Za-z_][A-Za-z0-9_]*" nil t)
-    (jmespath-make-token (jmespath-token-tag-UNQUOTEDSTRING) token-start (match-string 0))))
+  (re-search-forward "\\=[A-Za-z_][A-Za-z0-9_]*" nil t)
+  (jmespath-make-token (jmespath-token-tag-UNQUOTEDSTRING) token-start (match-string 0)))
 
 (defun jmespath-read-token ()
   (skip-syntax-forward " ")
