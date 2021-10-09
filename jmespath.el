@@ -631,9 +631,9 @@ same type."
 
 (defclass jmespath-ast-quoted-expression (jmespath-ast-node)
   ((child-expr :initarg :child-expr :reader child-expr-of)))
-(cl-defmethod jmespath-linearize-aux ((node jmespath-ast-quoted-expression) trailing)
+(cl-defmethod jmespath-linearize-aux ((node jmespath-ast-quoted-expression) _trailing)
   (jmespath-ast-quoted-expression :child-expr (jmespath-linearize (child-expr-of node))))
-(cl-defmethod jmespath-ast-eval-with-current ((node jmespath-ast-quoted-expression) current)
+(cl-defmethod jmespath-ast-eval-with-current ((node jmespath-ast-quoted-expression) _current)
   (error "direct evaluation of quoted JMESPath expression: %S" node))
 (defun jmespath-funeval-expression (node current)
   (cl-check-type node jmespath-ast-quoted-expression)
