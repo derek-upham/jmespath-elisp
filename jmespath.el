@@ -2176,28 +2176,27 @@ supports two %-sequences:
 
 This function typechecks the two arguments, and it adds `...`
 literal quotes for JSON values."
-  (let ((arg nil))
-    (with-temp-buffer
-      (insert query-string)
-      (goto-char (point-min))
-      (while (re-search-forward "%." nil t)
-        (let ((fmt-char (char-before)))
-          (delete-char -2)
-          (cl-case fmt-char
-            (?% (insert "%"))
-            (?i (let ((arg (pop args)))
-                  (unless (string-match "[A-Za-z_][A-Za-z0-9_]*" arg)
-                    (error "illegal JMESPath identifier: %s" arg))
-                  (insert arg)))
-            (?j (let ((arg (pop args)))
-                  (unless (jmespath-json-value-p arg)
-                    (error "illegal JSON value: %s" arg))
-                  (insert "`" (json-encode arg) "`")))
-            (t
-             (error "illegal format character: %%next-char")))))
-      (when (re-search-forward "%" nil t)
-        (format "Format string ends in middle of format identifier"))
-      (buffer-string))))
+  (with-temp-buffer
+    (insert query-string)
+    (goto-char (point-min))
+    (while (re-search-forward "%." nil t)
+      (let ((fmt-char (char-before)))
+        (delete-char -2)
+        (cl-case fmt-char
+          (?% (insert "%"))
+          (?i (let ((arg (pop args)))
+                (unless (string-match "[A-Za-z_][A-Za-z0-9_]*" arg)
+                  (error "illegal JMESPath identifier: %s" arg))
+                (insert arg)))
+          (?j (let ((arg (pop args)))
+                (unless (jmespath-json-value-p arg)
+                  (error "illegal JSON value: %s" arg))
+                (insert "`" (json-encode arg) "`")))
+          (t
+           (error "illegal format character: %%next-char")))))
+    (when (re-search-forward "%" nil t)
+      (error "Format string ends in middle of format identifier"))
+    (buffer-string)))
 
 ;;;###autoload
 (defun jmespath-compile-query (query-string-or-sexp)
