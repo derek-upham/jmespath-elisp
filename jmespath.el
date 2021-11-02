@@ -2167,15 +2167,18 @@ same type."
 (defun jmespath-format (query-string &rest args)
   "Use QUERY-STRING as a format string, substituting in ARGS.
 
-The format language does not match standard `format'.  It
-supports two %-sequences:
+The format string language does not match standard `format'.
+It supports three %-sequences:
 
-%i means print an indentifier.
-%j means print a JSON value.
+%i means print a string as a JMESPath indentifier.
+%j means print a JSON value as a JMESPath literal expression.
 %% puts a single % into the output.
 
-This function typechecks the two arguments, and it adds `...`
-literal quotes for JSON values."
+The function adds double quotes for identifiers and surrounding
+backticks for literal expressions.
+
+A JSON value is a data structure that satisfies
+`jmespath-json-value-p'."
   (with-temp-buffer
     (insert query-string)
     (goto-char (point-min))
@@ -2184,14 +2187,21 @@ literal quotes for JSON values."
         (delete-char -2)
         (cl-case fmt-char
           (?% (insert "%"))
-          (?i (let ((arg (pop args)))
-                (unless (string-match "[A-Za-z_][A-Za-z0-9_]*" arg)
+          (?i (let* ((arg (pop args)))
+                ;; JMESPath shares its quoted-string syntax with JSON
+                ;; strings.  We just need to make sure that the caller
+                ;; passed the right type.  Don't bother trying to
+                ;; generate unquoted strings here: the user doesn't
+                ;; normally see what comes out of this function.
+                (unless (stringp arg)
                   (error "illegal JMESPath identifier: %s" arg))
-                (insert arg)))
+                (insert (json-encode arg))))
           (?j (let ((arg (pop args)))
                 (unless (jmespath-json-value-p arg)
                   (error "illegal JSON value: %s" arg))
-                (insert "`" (json-encode arg) "`")))
+                ;; Literal expressions need the `...` wrapper *and*
+                ;; backquotes for any embedded backticks.
+                (insert "`" (replace-regexp-in-string "`" "\\\\`" (json-encode arg)) "`")))
           (t
            (error "illegal format character: %%next-char")))))
     (when (re-search-forward "%" nil t)
