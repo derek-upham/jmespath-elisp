@@ -1676,7 +1676,7 @@ same type."
 ;;       | infix    | or-expression         | "followed by" double-pipe
 ;;       | infix    | pipe-expression       | "followed by" single-pipe
 
-;; We model this precdence list in our
+;; We model this precedence list in our
 ;; 'parse-expression-{pipe,orelse,andthen,comparison,not}' functions:
 ;; each function is aware of the chaining operator that it accepts,
 ;; *plus* the higher-priority operators.  Each function knows to bail
