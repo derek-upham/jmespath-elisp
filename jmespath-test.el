@@ -34,11 +34,14 @@
 ;;;;
 
 (defun jmespath-run-test-case (test-file test-def-idx test-case-idx given-input test-case)
-  (let* ((jmespath-query (gethash "expression" test-case))
-         (expect-error (if (gethash "error" test-case) t nil))
-         (expected-result (or (gethash "result" test-case)
-                              (gethash "error" test-case)
-                              (error "no expected-result found")))
+  (let* ((jmespath-query (jmespath-json-object-get-field test-case "expression"))
+         (expect-error (jmespath-json-object-has-field test-case "error"))
+         (expected-result (cond ((jmespath-json-object-has-field test-case "result")
+                                 (jmespath-json-object-get-field test-case "result"))
+                                ((jmespath-json-object-has-field test-case "error")
+                                 (jmespath-json-object-get-field test-case "error"))
+                                (t
+                                 (error "no expected-result found"))))
          ;; We don't want to trap errors for debugging when running
          ;; error tests.
          (debug-on-error (if expect-error nil debug-on-error))
@@ -97,8 +100,8 @@
 (defun jmespath-run-test-definition (test-file test-def-idx test-def)
   ;; One "given" key with the input data.
   ;; One "cases" key with a list of JMESPath queries and their outputs.
-  (let* ((given-input (gethash "given" test-def))
-         (test-cases (gethash "cases" test-def))
+  (let* ((given-input (jmespath-json-object-get-field test-def "given"))
+         (test-cases (jmespath-json-object-get-field test-def "cases"))
          (print-circle nil))
     (cl-loop for test-case-idx from 1
              for test-case across test-cases
@@ -127,17 +130,20 @@
                      (insert (format "Actual result:       %s ⇥elisp↦ %S\n" (jmespath-elisp-to-json actual-result) actual-result))
                      (insert (format "Replay:              %S\n" `(jmespath-search ,jmespath-query ',given-input)))))))))
 
-(defun jmespath-run-test-file (filename)
+(defun jmespath-run-test-file (filename object-type)
   (let ((test-definitions-list
          (with-temp-buffer
            (insert-file-contents filename)
-           (json-parse-buffer))))
+           (json-parse-buffer :object-type object-type))))
     (cl-loop for test-def-idx from 1
              for test-def across test-definitions-list
              do (jmespath-run-test-definition filename test-def-idx test-def))))
 
-(defun jmespath-run-test-files (tests-directory)
+(defun jmespath-run-test-files (tests-directory &optional object-type)
   (interactive "DPath to test files: ")
+  ;; Use symbol `hash-table' to parse JSON as hash tables by default,
+  ;; to double-check support for that feature.
+  (unless object-type (setq object-type 'alist))
   (let ((report-buffer (get-buffer-create "*JMESPath Tests*")))
     (with-current-buffer report-buffer
       (setq buffer-read-only t)
@@ -165,7 +171,7 @@
                             )))
           (cl-loop for f in filenames
                    do (let ((current-file (expand-file-name f tests-directory)))
-                        (jmespath-run-test-file current-file)))))
+                        (jmespath-run-test-file current-file object-type)))))
 
       (visual-line-mode -1)
       (toggle-truncate-lines 1)

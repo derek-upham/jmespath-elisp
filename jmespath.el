@@ -59,18 +59,21 @@
 ;; This implementation requires parsed JSON data with the following
 ;; conventions:
 ;;
-;;  | JSON type | Emacs Lisp type |
-;;  |-----------|-----------------|
-;;  | object    | hash table      |
-;;  | array     | vector          |
-;;  | string    | string          |
-;;  | number    | number          |
-;;  | boolean   | t, :false       |
-;;  | null      | :null           |
+;;  | JSON type | Emacs Lisp type     |
+;;  |-----------|---------------------|
+;;  | object    | hash table or alist |
+;;  | array     | vector              |
+;;  | string    | string              |
+;;  | number    | number              |
+;;  | boolean   | t, :false           |
+;;  | null      | :null               |
 ;;
-;; These are the Jansson parser defaults.  The function returns a JSON
-;; data structure with the results of the query, using the same
-;; conventions.
+;; These will work with the Jansson parser defaults.  (Note that it
+;; also supports Jansson's "alist" representation for objects, but not
+;; "plist".)  The function returns a JSON data structure with the
+;; results of the query, using the same conventions.  Instruct the
+;; library on which object format to generate using the
+;; `jmespath-json-generated-object-type' variable (q.v.).
 ;;
 ;; JMESPath defines a set of built-in functions.  If you wish, you can
 ;; extend this set by defining your own specializer on
@@ -164,8 +167,24 @@
 (cl-deftype jmespath-json-array ()
   '(satisfies jmespath-json-array-p))
 
-(defun jmespath-json-object-p (thing)
+;; We support hash tables and association lists for JSON objects.
+
+(defun jmespath-json-alist-object-p (thing)
+  (and (listp thing)
+       (cl-every #'consp thing)))
+
+(cl-deftype jmespath-json-alist-object ()
+  '(satisfies jmespath-json-alist-object-p))
+
+(defun jmespath-json-hash-object-p (thing)
   (hash-table-p thing))
+
+(cl-deftype jmespath-json-hash-object ()
+  '(satisfies jmespath-json-hash-object-p))
+
+(defun jmespath-json-object-p (thing)
+  (or (jmespath-json-alist-object-p thing)
+      (jmespath-json-hash-object-p thing)))
 
 (cl-deftype jmespath-json-object ()
   '(satisfies jmespath-json-object-p))
@@ -190,7 +209,7 @@
     ;; never truthy
     (jmespath-json-null nil)
     ;; non-empty objects are truthy
-    (jmespath-json-object (cl-plusp (hash-table-count value)))
+    (jmespath-json-object (not (jmespath-json-object-empty-p value)))
     ;; test other types against their falsey values
     (jmespath-json-boolean (not (or (eq value :false) (eq value :nil))))
     (jmespath-json-string (not (string= value "")))
@@ -273,7 +292,168 @@
 (cl-deftype jmespath-countable ()
   '(satisfies jmespath-countable-p))
 
+;;;;
+;;;; Abstract out the different hash/alist representations
+;;;; for JSON objects.
+;;;;
 
+;; Remember that JSON association lists use symbols rather than
+;; strings.  For compatibility with JMESPath, any time one of these
+;; abstraction functions "reveals" an identifier, it reveals it as a
+;; string.
+
+(defgroup jmespath nil
+  "Customization variables for the `jmespath' library."
+  :group 'programming
+  :version 27.1)
+
+(defcustom jmespath-json-generated-object-type 'alist
+  "Generate JSON objects with this representation.
+
+Must be one of `alist' or `hash-table'.  JMESPath will create all
+fresh objects using that representation.  (It supports either
+format as input)."
+  :group 'jmespath
+  :type '(choice (const alist)
+                 (const hash-table)))
+
+;; It turns out we don't have any current need to construct an object
+;; from an association list base, so just support hash tables here.
+;;
+;; We still need this so we can pick the output format.
+(cl-defmethod jmespath-json-object-construct ((contents hash-table))
+  (cl-ecase jmespath-json-generated-object-type
+    (alist
+     (cl-loop for k being the hash-keys of contents
+              using (hash-values v)
+              collect (cons (intern k) v)))
+    (hash-table
+     contents)))
+
+(cl-defmethod jmespath-json-object-has-field ((object hash-table) field-name)
+  ;; We know that hash table keys are always strings, so we can pick
+  ;; whatever symbol we want to indicate a missing key.
+  (let* ((missing-var 'missing)
+         (maybe-value (gethash (if (symbolp field-name)
+                                   (symbol-name field-name)
+                                 field-name)
+                               object
+                               missing-var)))
+    (not (eq maybe-value missing-var))))
+
+(cl-defmethod jmespath-json-object-has-field ((object list) field-name)
+  (assq (if (stringp field-name)
+            (intern field-name)
+          field-name)
+        object))
+
+(cl-defmethod jmespath-json-object-get-field ((object hash-table) field-name)
+  (gethash (if (symbolp field-name)
+               (symbol-name field-name)
+             field-name)
+           object
+           :null))
+
+(cl-defmethod jmespath-json-object-get-field ((object list) field-name)
+  (let ((kv (assq (if (stringp field-name)
+                      (intern field-name)
+                    field-name)
+                  object)))
+    (if kv
+        (cdr kv)
+      :null)))
+
+(defun jmespath-json-object-empty-p (value)
+  (cl-typecase value
+    (jmespath-json-object-p
+     (zerop (jmespath-json-object-size value)))))
+
+(defun jmespath-json-object-size (object)
+  (cl-typecase object
+    (jmespath-json-hash-object
+     (hash-table-count object))
+    (jmespath-json-alist-object
+     (length object))))
+
+(defun jmespath-json-object-equals (left-value right-value)
+  (let ((left-value (cl-typecase left-value
+                      (jmespath-json-hash-object
+                       left-value)
+                      (jmespath-json-alist-object
+                       (let ((tbl (make-hash-table :test #'equal)))
+                         (cl-loop for (k . v) in left-value
+                                  do (puthash (symbol-name k) v tbl))
+                         tbl))))
+        (right-value (cl-typecase right-value
+                       (jmespath-json-hash-object
+                        right-value)
+                       (jmespath-json-alist-object
+                        (let ((tbl (make-hash-table :test #'equal)))
+                          (cl-loop for (k . v) in right-value
+                                   do (puthash (symbol-name k) v tbl))
+                          tbl)))))
+    (if (and (cl-loop for k being the hash-keys of left-value
+                      using (hash-values lv)
+                      unless (eq (jmespath-json-equal-compare lv (gethash k right-value nil)) t)
+                      return nil
+                      finally return t)
+             (cl-loop for k being the hash-keys of right-value
+                      using (hash-values rv)
+                      unless (eq (jmespath-json-equal-compare rv (gethash k left-value nil)) t)
+                      return nil
+                      finally return t))
+        t
+      :false)))
+
+(cl-defmethod jmespath-json-object-reduce ((object hash-table) accum fn)
+  "Call (FN ACCUM KEY VAL) on successive key/value pairs in OBJECT.
+
+Each value returned becomes ACCUM for the next key/value pair.  Return
+the final ACCUM.  There is no particular ordering."
+  (cl-loop for k being the hash-keys of object
+           using (hash-values v)
+           do (setq accum (funcall fn accum k v)))
+  accum)
+
+(cl-defmethod jmespath-json-object-reduce ((object list) accum fn)
+  "Call (FN ACCUM KEY VAL) on successive key/value pairs in OBJECT.
+
+Each value returned becomes ACCUM for the next key/value pair.  Return
+the final ACCUM.  There is no particular ordering."
+  (cl-loop for (k . v) in object
+           do (setq accum (funcall fn accum (symbol-name k) v)))
+  accum)
+
+(defun jmespath-json-merge-objects (object-list)
+  (cl-flet ((jmespath-json-merge-objects-aux (existing overwriting)
+              (cl-typecase overwriting
+                (jmespath-json-hash-object
+                 (cl-loop for k being the hash-keys of overwriting
+                          using (hash-values v)
+                          do (puthash k v existing))
+                 existing)
+                (jmespath-json-alist-object
+                 (cl-loop for (k . v) in overwriting
+                          do (puthash (symbol-name k) v existing))
+                 existing))))
+    (jmespath-json-object-construct
+     (cl-loop with tmp = (make-hash-table :test 'equal)
+              for object in object-list
+              do (setq tmp (jmespath-json-merge-objects-aux tmp object))
+              finally return tmp))))
+
+(cl-defmethod jmespath-json-object-keys ((object hash-table))
+  (hash-table-keys object))
+
+(cl-defmethod jmespath-json-object-keys ((object list))
+  (mapcar #'symbol-name (mapcar #'car object)))
+
+(cl-defmethod jmespath-json-object-values ((object hash-table))
+  (cl-loop for v being the hash-values of object
+           collect v))
+
+(cl-defmethod jmespath-json-object-values ((object list))
+  (mapcar #'cdr object))
 
 ;;;;
 ;;;; Utility functions
@@ -311,18 +491,7 @@ Return JSON false otherwise."
       :false))
    ((and (cl-typep left-value 'jmespath-json-object)
          (cl-typep right-value 'jmespath-json-object))
-    (if (and (cl-loop for k being the hash-keys of left-value
-                      using (hash-values lv)
-                      unless (eq (jmespath-json-equal-compare lv (gethash k right-value nil)) t)
-                      return nil
-                      finally return t)
-             (cl-loop for k being the hash-keys of right-value
-                      using (hash-values rv)
-                      unless (eq (jmespath-json-equal-compare rv (gethash k left-value nil)) t)
-                      return nil
-                      finally return t))
-        t
-      :false))
+    (jmespath-json-object-equals left-value right-value))
    ((and (cl-typep left-value 'jmespath-json-null)
          (cl-typep right-value 'jmespath-json-null))
     t)
@@ -812,7 +981,7 @@ same type."
     (jmespath-json-object
      (cl-destructuring-bind (field-name) opargs
        (cl-check-type field-name jmespath-identifier)
-       (gethash field-name current :null)))
+       (jmespath-json-object-get-field current field-name)))
     (t
      :null)))
 
@@ -847,12 +1016,21 @@ same type."
      :null)
     (t
      (cl-destructuring-bind (pairs) opargs
-       (cl-loop with table = (make-hash-table :size (length pairs) :test 'equal)
-                for (key . expr) in pairs
-                do (cl-check-type key jmespath-identifier)
-                do (cl-check-type expr jmespath-ast-node)
-                do (puthash key (jmespath-ast-eval-with-current expr current) table)
-                finally return table)))))
+       (jmespath-json-object-construct
+        ;; Use a hash intermediate representation here, for two
+        ;; reasons:
+        ;;
+        ;; 1. The multi-select hash body might have redundant keys,
+        ;; and we have to guarantee that we flush them out.
+        ;;
+        ;; 2. The "native" key format is a string, which matches our
+        ;; internal hash table representation.
+        (cl-loop with tmp = (make-hash-table :test 'equal)
+                 for (key . expr) in pairs
+                 do (cl-check-type key jmespath-identifier)
+                 do (cl-check-type expr jmespath-ast-node)
+                 do (puthash key (jmespath-ast-eval-with-current expr current) tmp)
+                 finally return tmp))))))
 
 (cl-defmethod jmespath-linear-immediate ((_opcode (eql 'function-call)) opargs current)
   ;; The spec is explicit that "not_null" evaluates left-to-right
@@ -878,8 +1056,10 @@ same type."
   (cl-typecase current
     (jmespath-json-object
      (jmespath-strip-nulls
-      (cl-coerce (cl-loop for v being the hash-values of current
-                          collect (jmespath-linear-eval ops-remaining v))
+      (cl-coerce (jmespath-json-object-reduce
+                  current nil
+                  #'(lambda (accum k v)
+                      (cons (jmespath-linear-eval ops-remaining v) accum)))
                  'vector)))
     (t
      :null)))
@@ -1079,7 +1259,7 @@ same type."
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'keys)) function-args current)
   (jmespath-call-function-eval-args 'keys ((val jmespath-json-object)) function-args current
-    (cl-coerce (hash-table-keys val) 'vector)))
+    (cl-coerce (jmespath-json-object-keys val) 'vector)))
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'length)) function-args current)
   (jmespath-call-function-eval-args 'length ((val jmespath-countable)) function-args current
@@ -1088,7 +1268,7 @@ same type."
            jmespath-json-array)
        (length val))
       (jmespath-json-object
-       (hash-table-size val))
+       (jmespath-json-object-size val))
       (t
        (signal 'jmespath-invalid-type-error (list 'length val))))))
 
@@ -1139,12 +1319,9 @@ same type."
   (cl-typecase function-args
     (null '())
     (jmespath-list-of-expressions
-     (cl-loop with tmp = (make-hash-table :test 'equal)
-              for expr in function-args
-              do (cl-loop for k being the hash-keys of (jmespath-ast-eval-with-current expr current)
-                          using (hash-values v)
-                          do (puthash k v tmp))
-              finally return tmp))
+     (jmespath-json-object-construct
+      (jmespath-json-merge-objects
+       (mapcar #'(lambda (expr) (jmespath-ast-eval-with-current expr current)) function-args))))
     (t
      (signal 'jmespath-invalid-type-error (list 'merge function-args current)))))
 
@@ -1281,7 +1458,7 @@ same type."
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'values)) function-args current)
   (jmespath-call-function-eval-args 'values ((val jmespath-json-object)) function-args current
-    (cl-coerce (hash-table-values val) 'vector)))
+    (cl-coerce (jmespath-json-object-values val) 'vector)))
 
 
 ;;;;
