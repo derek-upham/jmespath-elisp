@@ -1058,7 +1058,7 @@ same type."
      (jmespath-strip-nulls
       (cl-coerce (jmespath-json-object-reduce
                   current nil
-                  #'(lambda (accum k v)
+                  #'(lambda (accum _k v)
                       (cons (jmespath-linear-eval ops-remaining v) accum)))
                  'vector)))
     (t
