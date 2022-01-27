@@ -204,7 +204,7 @@
 ;;; "-json-" infix.
 
 (defun jmespath-truthy-p (value)
-  "Return true boolean and filter expressions should treat VALUE as true."
+  "Return true if boolean and filter expressions should treat VALUE as true."
   (cl-typecase value
     ;; never truthy
     (jmespath-json-null nil)
