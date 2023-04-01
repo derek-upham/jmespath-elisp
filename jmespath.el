@@ -131,9 +131,8 @@
 ;;; https://alhassy.github.io/TypedLisp.html
 ;;; Learn it.  Know it.  Live it.
 
-;;; First we define the JSON types.  Notice that objects are hash
-;;; tables, not association lists.  Association lists are easier to
-;;; read, but they have O(n²) performance for some operations.
+;;; First we define the JSON types.  Notice that objects can be both
+;;; hash tables or association lists.
 
 (defun jmespath-json-null-p (thing)
   (eq :null thing))
@@ -167,8 +166,6 @@
 (cl-deftype jmespath-json-array ()
   '(satisfies jmespath-json-array-p))
 
-;; We support hash tables and association lists for JSON objects.
-
 (defun jmespath-json-alist-object-p (thing)
   (and (listp thing)
        (cl-every #'consp thing)))
@@ -200,8 +197,8 @@
 (cl-deftype jmespath-json-value ()
   '(satisfies jmespath-json-value-p))
 
-;;; These are JMESPath concepts, not JSON concepts, so there's no
-;;; "-json-" infix.
+;;; These next couple of definitions are for JMESPath concepts, not
+;;; JSON concepts.  That's why there is no "-json-" infix.
 
 (defun jmespath-truthy-p (value)
   "Return true if boolean and filter expressions should treat VALUE as true."
@@ -312,15 +309,14 @@
 
 Must be one of `alist' or `hash-table'.  JMESPath will create all
 fresh objects using that representation.  (It supports either
-format as input)."
+format as input).
+
+Prefer `alist', unless the O(n²) performance of association lists
+becomes a problem for you."
   :group 'jmespath
   :type '(choice (const alist)
                  (const hash-table)))
 
-;; It turns out we don't have any current need to construct an object
-;; from an association list base, so just support hash tables here.
-;;
-;; We still need this so we can pick the output format.
 (cl-defmethod jmespath-json-object-construct ((contents hash-table))
   (cl-ecase jmespath-json-generated-object-type
     (alist
@@ -329,6 +325,16 @@ format as input)."
               collect (cons (intern k) v)))
     (hash-table
      contents)))
+
+(cl-defmethod jmespath-json-object-construct ((contents list))
+  (cl-ecase jmespath-json-generated-object-type
+    (alist
+     contents)
+    (hash-table
+     (cl-loop with tmp = (make-hash-table :test 'equal)
+              for (k . v) in contents
+              do (puthash (intern k) v tmp)
+              return tmp))))
 
 (cl-defmethod jmespath-json-object-has-field ((object hash-table) field-name)
   ;; We know that hash table keys are always strings, so we can pick
