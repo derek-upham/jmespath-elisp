@@ -1300,6 +1300,10 @@ same type."
       (cl-reduce #'max vals)))))
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'max_by)) function-args current)
+  ;; Notice that we could use `jmespath-call-function-eval-args' for
+  ;; 'max', but we can't for 'max_by'.  That's due to the 'key'
+  ;; mechanism.  It requires us to evaluate and track the extracted
+  ;; keys alongside the array values themselves.
   (cl-destructuring-bind (array-expr key-expr) function-args
     (let ((array-value (jmespath-ast-eval-with-current array-expr current)))
       (cond
@@ -1307,9 +1311,12 @@ same type."
         (signal 'jmespath-invalid-type-error (list 'max_by key-expr)))
        ((not (cl-typep array-value 'jmespath-json-array))
         (signal 'jmespath-invalid-type-error (list 'max_by array-expr)))
-       ((= (length array-value) 0)
-        (signal 'jmespath-invalid-value-error (list 'max_by array-expr)))
+       ((zerop (length array-value))
+        :null)
        (t
+        ;; The name "kv-pairs" usually means "key/value pairs from a
+        ;; dictionary".  Here, the left-hand part of the pair is "what
+        ;; the key function returned for the right-hand side".
         (let ((kv-pairs (cl-mapcar #'(lambda (x)
                                        (cons (jmespath-funeval-expression key-expr x) x))
                                    array-value)))
@@ -1342,6 +1349,10 @@ same type."
       (cl-reduce #'min vals)))))
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'min_by)) function-args current)
+  ;; Notice that we could use `jmespath-call-function-eval-args' for
+  ;; 'min', but we can't for 'min_by'.  That's due to the 'key'
+  ;; mechanism.  It requires us to evaluate and track the extracted
+  ;; keys alongside the array values themselves.
   (cl-destructuring-bind (array-expr key-expr) function-args
     (let ((array-value (jmespath-ast-eval-with-current array-expr current)))
       (cond
@@ -1349,9 +1360,12 @@ same type."
         (signal 'jmespath-invalid-type-error (list 'min_by key-expr)))
        ((not (cl-typep array-value 'jmespath-json-array))
         (signal 'jmespath-invalid-type-error (list 'min_by array-expr)))
-       ((= (length array-value) 0)
-        (signal 'jmespath-invalid-value-error (list 'min_by array-expr)))
+       ((zerop (length array-value))
+        :null)
        (t
+        ;; The name "kv-pairs" usually means "key/value pairs from a
+        ;; dictionary".  Here, the left-hand part of the pair is "what
+        ;; the key function returned for the right-hand side".
         (let ((kv-pairs (cl-mapcar #'(lambda (x)
                                        (cons (jmespath-funeval-expression key-expr x) x))
                                    array-value)))
