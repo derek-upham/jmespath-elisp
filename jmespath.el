@@ -382,6 +382,12 @@ becomes a problem for you."
      (length object))))
 
 (defun jmespath-json-object-equals (left-value right-value)
+  ;; Massage each side into a hash table if it isn't already one.
+  ;; Then we can run two loops, probing for left-to-right and for
+  ;; right-to-left.
+  ;;
+  ;; I haven't done performance testing, so there may be room for
+  ;; optimizing.  This is good enough for now.
   (let ((left-value (cl-typecase left-value
                       (jmespath-json-hash-object
                        left-value)
@@ -431,6 +437,11 @@ the final ACCUM.  There is no particular ordering."
   accum)
 
 (defun jmespath-json-merge-objects (object-list)
+  "Merge each object in OBJECT-LIST into a single object and return it.
+
+This implements the JMESPath 'merge' function."
+  ;; This turns everything into a hash and then converts to the
+  ;; requested object representation when returning.
   (cl-flet ((jmespath-json-merge-objects-aux (existing overwriting)
               (cl-typecase overwriting
                 (jmespath-json-hash-object
@@ -726,15 +737,15 @@ same type."
 (defclass jmespath-ast-comparison-> (jmespath-ast-node)
   ((left-expr  :initarg :left-expr  :reader left-expr-of)
    (right-expr :initarg :right-expr :reader right-expr-of)))
+(cl-defmethod jmespath-linearize-aux ((node jmespath-ast-comparison->) _trailing)
+  (jmespath-ast-comparison->
+   :left-expr (jmespath-linearize (left-expr-of node))
+   :right-expr (jmespath-linearize (right-expr-of node))))
 (cl-defmethod jmespath-ast-eval-with-current ((node jmespath-ast-comparison->) current)
   (jmespath-json-order-compare
    '>
    (jmespath-ast-eval-with-current (left-expr-of node) current)
    (jmespath-ast-eval-with-current (right-expr-of node) current)))
-(cl-defmethod jmespath-linearize-aux ((node jmespath-ast-comparison->) _trailing)
-  (jmespath-ast-comparison->
-   :left-expr (jmespath-linearize (left-expr-of node))
-   :right-expr (jmespath-linearize (right-expr-of node))))
 
 (defclass jmespath-ast-comparison->= (jmespath-ast-node)
   ((left-expr  :initarg :left-expr  :reader left-expr-of)
@@ -844,13 +855,16 @@ same type."
        :null))))
 
 
-;;; These are AST nodes that don't persist after we're done parsing.
-;;; We turn them into the "linear" form based on s-expressions.
-
-;; We plug linear sequences into the AST, and
-;; `jmespath-ast-eval-with-current` evaluation reaches them, but they
-;; have their own evaluation mechanism (dispatching to
-;; `jmespath-linear-eval`).
+;; These are AST nodes that we are converting to "linearized" form.
+;;
+;; We have descended into the AST past any risk of flatting/reshaping,
+;; so these are just the (△□ → △□) evaluations that we diagrammed
+;; above.  The entry point is the `jmespath-eval-sequence' node type.
+;;
+;; The linearization process uses the same `jmespath-linearize-auth'
+;; reshaping from here down, but we just build a series of tagged
+;; cells that we will pass to `jmespath-linear-eval' when we evaluate
+;; the node.
 (defclass jmespath-eval-sequence (jmespath-ast-node)
   ((operations :initarg :operations :reader operations-of)))
 (cl-defmethod jmespath-ast-eval-with-current ((node jmespath-eval-sequence) current)
@@ -955,6 +969,10 @@ same type."
 ;;; :null values as well.
 
 (defun jmespath-linear-eval (op-chain current)
+  "Evaluate operations OP-CHAIN on the CURRENT working value.
+
+  The OP-CHAIN argument is that list of tagged cells that we
+  constructed for the linearized AST nodes."
   (cl-loop for cursor on op-chain
            for operation = (car cursor)
            for ops-remaining = (cdr cursor)
@@ -1182,14 +1200,40 @@ same type."
   1. Associates variables with function expressions (and validates arity).
   2. Evaluates the function expressions and values the types of the results.
 
-"
+FUNCTION-IDENTIFIER is the name of the function (a symbol), used
+during error reporting.
+
+VARS+TYPES is a list of (variable type-predicate) pairs.  We bind
+the function arguments to the variables, which are then in scope
+for the body.  If there is an arity mismatch or a type mismatch,
+we throw an error.
+
+EXPRS is a list of function arguments that we will evaluate and
+then bind to the VARS.
+
+CURRENT is the current working value.
+
+The macro works in a loop:
+
+1. Extract the next function expression from EXPRS.
+2. Evaluate it against CURRENT.
+3. Bind it to the next VAR.
+4. Typecheck the value that we bound.
+
+Notice that we don't update CURRENT in the loop.  It just
+provides context for any evaluation happening in the function
+arguments.
+
+At the end of the loop, we evaluate BODY in a lexical context
+with VARS.  That value becomes the return value of the function
+call."
   (declare (indent 4) (debug (sexp sexp form form &rest form)))
   (let ((exprs-var (gensym)))
     (cond
      ((null vars+types)
       `(let ((,exprs-var ,exprs))
          (cond
-          ((null ,exprs)
+          ((null ,exprs-var)
            (progn ,@body))
           (t
            (signal 'jmespath-invalid-arity-error (list ,function-identifier))))))
