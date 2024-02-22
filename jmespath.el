@@ -210,7 +210,7 @@
     ;; test other types against their falsey values
     (jmespath-json-boolean (not (or (eq value :false) (eq value :nil))))
     (jmespath-json-string (not (string= value "")))
-    (jmespath-json-array (not (eq value [])))
+    (jmespath-json-array (not (zerop (length []))))
     ;; numbers are never falsey
     (jmespath-json-number t)
     (t (error "unexpected type for value %s" value))))
@@ -439,7 +439,7 @@ the final ACCUM.  There is no particular ordering."
 (defun jmespath-json-merge-objects (object-list)
   "Merge each object in OBJECT-LIST into a single object and return it.
 
-This implements the JMESPath 'merge' function."
+This implements the JMESPath \"merge\" function."
   ;; This turns everything into a hash and then converts to the
   ;; requested object representation when returning.
   (cl-flet ((jmespath-json-merge-objects-aux (existing overwriting)
