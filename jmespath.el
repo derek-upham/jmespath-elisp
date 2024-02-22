@@ -371,7 +371,7 @@ becomes a problem for you."
 
 (defun jmespath-json-object-empty-p (value)
   (cl-typecase value
-    (jmespath-json-object-p
+    (jmespath-json-object
      (zerop (jmespath-json-object-size value)))))
 
 (defun jmespath-json-object-size (object)
@@ -1266,7 +1266,7 @@ call."
                                     (abs val)))
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'avg)) function-args current)
-  (jmespath-call-function-eval-args 'avg ((vals jmespath-array-of-numbers-p)) function-args current
+  (jmespath-call-function-eval-args 'avg ((vals jmespath-array-of-numbers)) function-args current
     (if (zerop (length vals))
         :null
       (/ (cl-reduce #'+ vals :initial-value 0)
