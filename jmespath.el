@@ -210,7 +210,7 @@
     ;; test other types against their falsey values
     (jmespath-json-boolean (not (or (eq value :false) (eq value :nil))))
     (jmespath-json-string (not (string= value "")))
-    (jmespath-json-array (not (zerop (length []))))
+    (jmespath-json-array (not (zerop (length value))))
     ;; numbers are never falsey
     (jmespath-json-number t)
     (t (error "unexpected type for value %s" value))))
