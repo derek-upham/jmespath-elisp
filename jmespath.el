@@ -100,6 +100,9 @@
 ;; ⇒ ((WashingtonCities . "Bellevue, Olympia, Seattle"))
 
 (require 'cl-lib)                       ; soooo much cl-lib...
+(require 'eieio)                        ; for defclass
+(require 'json)                         ; for json-encode
+(require 'seq)                          ; reduces the cl-lib calls slightly
 
 ;;;
 ;;; Errors
@@ -168,7 +171,7 @@
 
 (defun jmespath-json-alist-object-p (thing)
   (and (listp thing)
-       (cl-every #'consp thing)))
+       (seq-every-p #'consp thing)))
 
 (cl-deftype jmespath-json-alist-object ()
   '(satisfies jmespath-json-alist-object-p))
@@ -230,28 +233,28 @@
 
 (defun jmespath-array-of-numbers-p (thing)
   (and (jmespath-json-array-p thing)
-       (cl-every #'jmespath-json-number-p thing)))
+       (seq-every-p #'jmespath-json-number-p thing)))
 
 (cl-deftype jmespath-array-of-numbers ()
   '(satisfies jmespath-array-of-numbers-p))
 
 (defun jmespath-array-of-strings-p (thing)
   (and (jmespath-json-array-p thing)
-       (cl-every #'jmespath-json-string-p thing)))
+       (seq-every-p #'jmespath-json-string-p thing)))
 
 (cl-deftype jmespath-array-of-strings ()
   '(satisfies jmespath-array-of-strings-p))
 
 (defun jmespath-array-of-objects-p (thing)
   (and (jmespath-json-array-p thing)
-       (cl-every #'jmespath-json-object-p thing)))
+       (seq-every-p #'jmespath-json-object-p thing)))
 
 (cl-deftype jmespath-array-of-objects ()
   '(satisfies jmespath-array-of-objects-p))
 
 (defun jmespath-list-of-objects-p (thing)
   (and (listp thing)
-       (cl-every #'jmespath-json-object-p thing)))
+       (seq-every-p #'jmespath-json-object-p thing)))
 
 (cl-deftype jmespath-list-of-objects ()
   '(satisfies jmespath-list-of-objects-p))
@@ -528,33 +531,41 @@ Note that comparisons are only meaningful for numbers."
         :false)
     :null))
 
+;; We use this to correct for functions that take any sequence type
+;; but always return a list.
+(defun jmespath-back-to-array (seq)
+  "Convert sequence SEQ to a JMESPath array."
+  (seq-into seq 'vector))
+
 ;; This implements the "flatten" operator, of course.
 (defun jmespath-flatten-1-array (arr)
   "Flatten JSON array ARR by one level.
 
 The function splices the elements of any JSON array elements,
 while preserving all non-array elements as-is."
-  (cl-coerce (cl-loop for x across arr
-                      if (cl-typep x 'jmespath-json-array)
-                      append (cl-coerce x 'list)
-                      else
-                      collect x
-                      end)
-             'vector))
+  (jmespath-back-to-array (cl-loop for x across arr
+                                   if (cl-typep x 'jmespath-json-array)
+                                   append (seq-into x 'list)
+                                   else
+                                   collect x
+                                   end)))
 
 ;; All of the projection operations use this.
-(defun jmespath-strip-nulls (seq)
-  "Strip all :nulls from SEQ and return it.
+(defun jmespath-strip-nulls (array)
+  "Strip all JSON :nulls from ARRAY and return it."
+  (cl-check-type array jmespath-json-array)
+  (jmespath-back-to-array (seq-remove #'(lambda (x) (eq :null x)) array)))
 
-SEQ is any sequence type.  This function returns a value of the
-same type."
-  (cl-delete :null seq :test 'eq))
 
 ;;;;
 ;;;; Abstract Syntax Tree
 ;;;;
 
 ;;; These are predeclarations.  We'll go into more detail later.
+
+;;; We use EIEIO's `defclass' because `defclass' hooks its
+;;; reader/writer/accessor methods into the `cl-defgeneric' framework.
+;;; It makes for cleaner code.
 
 (defclass jmespath-ast-node () nil
   :documentation "The root type for JMESPath evaluation Abstract Syntax Trees.")
@@ -565,7 +576,7 @@ same type."
 ;; argument lists.
 (defun jmespath-list-of-expressions-p (thing)
   (and (listp thing)
-       (cl-every #'(lambda (x) (object-of-class-p x 'jmespath-ast-node)) thing)))
+       (seq-every-p #'(lambda (x) (object-of-class-p x 'jmespath-ast-node)) thing)))
 
 (cl-deftype jmespath-list-of-expressions ()
   '(satisfies jmespath-list-of-expressions-p))
@@ -848,9 +859,9 @@ same type."
       (jmespath-json-array
        (let ((flattened-array (jmespath-flatten-1-array left-current)))
          (jmespath-strip-nulls
-          (cl-map 'vector
-                  #'(lambda (x) (jmespath-ast-eval-with-current (right-expr-of node) x))
-                  flattened-array))))
+          (jmespath-back-to-array
+           (seq-map #'(lambda (x) (jmespath-ast-eval-with-current (right-expr-of node) x))
+                    flattened-array)))))
       (t
        :null))))
 
@@ -930,7 +941,7 @@ same type."
   ((left-expr :initarg :left-expr :reader left-expr-of)
    (elements :initarg :elements :reader elements-of)))
 (cl-defmethod jmespath-linearize-aux ((node jmespath-ast-multi-select-list) trailing)
-  (let ((linearized-elements (cl-mapcar #'(lambda (x) (jmespath-linearize x)) (elements-of node))))
+  (let ((linearized-elements (seq-map #'(lambda (x) (jmespath-linearize x)) (elements-of node))))
     (jmespath-linearize-aux (left-expr-of node)
                             (cons `(multi-select-list ,linearized-elements) trailing))))
 
@@ -950,8 +961,8 @@ same type."
   (jmespath-linearize-aux
    (left-expr-of node)
    (cons `(function-call ,(function-name-of node)
-                         ,(cl-mapcar #'(lambda (x) (jmespath-linearize x))
-                                     (function-args-of node)))
+                         ,(seq-map #'(lambda (x) (jmespath-linearize x))
+                                   (function-args-of node)))
          trailing)))
 
 
@@ -1003,7 +1014,7 @@ same type."
 (cl-defmethod jmespath-linear-immediate ((_opcode (eql 'extract-field)) opargs current)
   (cl-typecase current
     (jmespath-json-object
-     (cl-destructuring-bind (field-name) opargs
+     (seq-let (field-name) opargs
        (cl-check-type field-name jmespath-identifier)
        (jmespath-json-object-get-field current field-name)))
     (t
@@ -1012,7 +1023,7 @@ same type."
 (cl-defmethod jmespath-linear-immediate ((_opcode (eql 'extract-index)) opargs current)
   (cl-typecase current
     (jmespath-json-array
-     (cl-destructuring-bind (idx) opargs
+     (seq-let (idx) opargs
        (cl-check-type idx jmespath-json-number)
        (let* ((len (length current))
               (logical-idx (if (< idx 0)
@@ -1029,17 +1040,17 @@ same type."
     (jmespath-json-null
      :null)
     (t
-     (cl-destructuring-bind (elements) opargs
-       (cl-map 'vector
-               #'(lambda (e) (jmespath-ast-eval-with-current e current))
-               elements)))))
+     (seq-let (elements) opargs
+       (jmespath-back-to-array
+        (seq-map #'(lambda (e) (jmespath-ast-eval-with-current e current))
+                 elements))))))
 
 (cl-defmethod jmespath-linear-immediate ((_opcode (eql 'multi-select-hash)) opargs current)
   (cl-typecase current
     (jmespath-json-null
      :null)
     (t
-     (cl-destructuring-bind (pairs) opargs
+     (seq-let (pairs) opargs
        (jmespath-json-object-construct
         ;; Use a hash intermediate representation here, for two
         ;; reasons:
@@ -1072,7 +1083,8 @@ same type."
   ;; This is another generic function with `eql' dispatch, defined
   ;; later.  We could actually move the interning of the function name
   ;; all the way up to the parser, if we care to in the future.
-  (jmespath-call-function (intern (cl-first opargs)) (cl-second opargs) current))
+  (seq-let (function-identifier function-args) opargs
+    (jmespath-call-function (intern function-identifier) function-args current)))
 
 (cl-defgeneric jmespath-linear-project (opcode opargs current ops-remaining))
 
@@ -1080,11 +1092,10 @@ same type."
   (cl-typecase current
     (jmespath-json-object
      (jmespath-strip-nulls
-      (cl-coerce (jmespath-json-object-reduce
-                  current nil
-                  #'(lambda (accum _k v)
-                      (cons (jmespath-linear-eval ops-remaining v) accum)))
-                 'vector)))
+      (jmespath-back-to-array
+       (jmespath-json-object-reduce current nil
+                                    #'(lambda (accum _k v)
+                                        (cons (jmespath-linear-eval ops-remaining v) accum))))))
     (t
      :null)))
 
@@ -1092,12 +1103,13 @@ same type."
   (cl-typecase current
     (jmespath-json-array
      (jmespath-strip-nulls
-      (cl-map 'vector #'(lambda (x) (jmespath-linear-eval ops-remaining x)) current)))
+      (jmespath-back-to-array
+       (seq-map #'(lambda (x) (jmespath-linear-eval ops-remaining x)) current))))
     (t
      :null)))
 
 (cl-defmethod jmespath-linear-project ((_opcode (eql 'extract-slice)) opargs current ops-remaining)
-  (cl-destructuring-bind (start stop step) opargs
+  (seq-let (start stop step) opargs
     (cl-check-type start (or null jmespath-json-number))
     (cl-check-type stop (or null jmespath-json-number))
     (cl-check-type step (or null jmespath-json-number))
@@ -1160,32 +1172,32 @@ same type."
          (let ((collection (if (< 0 step)
                                ;; We might get a performance boost by looking for `step' of 1 and
                                ;; using `seq-subseq' in that case.  It's probably not worth it.
-                               (cl-coerce (cl-loop for i from start below stop by step
-                                                   when (and (<= 0 i) (< i len))
-                                                   collect (jmespath-linear-eval ops-remaining (aref current i)))
-                                          'vector)
+                               (jmespath-back-to-array
+                                (cl-loop for i from start below stop by step
+                                         when (and (<= 0 i) (< i len))
+                                         collect (jmespath-linear-eval ops-remaining (aref current i))))
                              ;; The `by' clause always has to be positive, sadly.
-                             (cl-coerce (cl-loop for i from start above stop by (- step)
-                                                 when (and (<= 0 i) (< i len))
-                                                 collect (jmespath-linear-eval ops-remaining (aref current i)))
-                                        'vector))))
+                             (jmespath-back-to-array
+                              (cl-loop for i from start above stop by (- step)
+                                       when (and (<= 0 i) (< i len))
+                                       collect (jmespath-linear-eval ops-remaining (aref current i)))))))
            (jmespath-strip-nulls collection))))
       (t
        :null))))
 
 (cl-defmethod jmespath-linear-project ((_opcode (eql 'filter)) opargs current ops-remaining)
-  (cl-destructuring-bind (filter-expr) opargs
+  (seq-let (filter-expr) opargs
     (cl-check-type filter-expr jmespath-ast-node)
     (cl-typecase current
       (jmespath-json-array
        (let ((stripped-elements
-              (cl-remove-if-not #'(lambda (x)
-                                    (jmespath-truthy-p (jmespath-ast-eval-with-current filter-expr x)))
-                                current)))
+              (seq-filter #'(lambda (x)
+                              (jmespath-truthy-p (jmespath-ast-eval-with-current filter-expr x)))
+                          current)))
          (jmespath-strip-nulls
-          (cl-map 'vector
-                  #'(lambda (x) (jmespath-linear-eval ops-remaining x))
-                  stripped-elements))))
+          (jmespath-back-to-array
+           (seq-map #'(lambda (x) (jmespath-linear-eval ops-remaining x))
+                    stripped-elements)))))
       (t
        :null))))
 
@@ -1238,7 +1250,7 @@ call."
           (t
            (signal 'jmespath-invalid-arity-error (list ,function-identifier))))))
      (t
-      (cl-destructuring-bind ((v tp) &rest v+tp_) vars+types
+      (seq-let ((v tp) &rest v+tp_) vars+types
         `(let ((,exprs-var ,exprs))
            (cond
             ((null ,exprs-var)
@@ -1269,7 +1281,7 @@ call."
   (jmespath-call-function-eval-args 'avg ((vals jmespath-array-of-numbers)) function-args current
     (if (zerop (length vals))
         :null
-      (/ (cl-reduce #'+ vals :initial-value 0)
+      (/ (seq-reduce #'+ vals 0)
          (float (length vals))))))
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'ceil)) function-args current)
@@ -1281,9 +1293,9 @@ call."
                                     function-args current
     (cond
      ((and (cl-typep data 'jmespath-json-string) (cl-typep candidate 'jmespath-json-string))
-      (if (cl-search candidate data) t :false))
+      (if (string-search candidate data) t :false))
      ((cl-typep data 'jmespath-json-array)
-      (if (cl-find candidate data :test 'equal) t :false))
+      (if (seq-contains-p data candidate) t :false))
      (t
       (signal 'jmespath-invalid-type-error (list 'contains data candidate))))))
 
@@ -1309,7 +1321,7 @@ call."
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'keys)) function-args current)
   (jmespath-call-function-eval-args 'keys ((val jmespath-json-object)) function-args current
-    (cl-coerce (jmespath-json-object-keys val) 'vector)))
+    (jmespath-back-to-array (jmespath-json-object-keys val))))
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'length)) function-args current)
   (jmespath-call-function-eval-args 'length ((val jmespath-countable)) function-args current
@@ -1323,7 +1335,7 @@ call."
        (signal 'jmespath-invalid-type-error (list 'length val))))))
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'map)) function-args current)
-  (cl-destructuring-bind (extractor-expr array-expr) function-args
+  (seq-let (extractor-expr array-expr) function-args
     (let ((array-value (jmespath-ast-eval-with-current array-expr current)))
       (cond
        ((not (cl-typep extractor-expr 'jmespath-ast-quoted-expression))
@@ -1331,7 +1343,8 @@ call."
        ((not (cl-typep array-value 'jmespath-json-array))
         (signal 'jmespath-invalid-type-error (list 'map array-expr)))
        (t
-        (cl-map 'vector #'(lambda (x) (jmespath-funeval-expression extractor-expr x)) array-value))))))
+        (jmespath-back-to-array
+         (seq-map #'(lambda (x) (jmespath-funeval-expression extractor-expr x)) array-value)))))))
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'max)) function-args current)
   (jmespath-call-function-eval-args 'max ((vals jmespath-array-of-orderables)) function-args current
@@ -1339,16 +1352,18 @@ call."
      ((zerop (length vals))
       :null)
      ((cl-typep (elt vals 0) 'jmespath-json-string)
-      (cl-reduce #'(lambda (a b) (if (string< a b) b a)) vals))
+      (seq-let (initial &rest rest) vals
+        (seq-reduce #'(lambda (a b) (if (string< a b) b a)) rest initial)))
      ((cl-typep (elt vals 0) 'jmespath-json-number)
-      (cl-reduce #'max vals)))))
+      (seq-let (initial &rest rest) vals
+        (seq-reduce #'max rest initial))))))
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'max_by)) function-args current)
   ;; Notice that we could use `jmespath-call-function-eval-args' for
   ;; 'max', but we can't for 'max_by'.  That's due to the 'key'
   ;; mechanism.  It requires us to evaluate and track the extracted
   ;; keys alongside the array values themselves.
-  (cl-destructuring-bind (array-expr key-expr) function-args
+  (seq-let (array-expr key-expr) function-args
     (let ((array-value (jmespath-ast-eval-with-current array-expr current)))
       (cond
        ((not (cl-typep key-expr 'jmespath-ast-quoted-expression))
@@ -1361,16 +1376,21 @@ call."
         ;; The name "kv-pairs" usually means "key/value pairs from a
         ;; dictionary".  Here, the left-hand part of the pair is "what
         ;; the key function returned for the right-hand side".
-        (let ((kv-pairs (cl-mapcar #'(lambda (x)
-                                       (cons (jmespath-funeval-expression key-expr x) x))
-                                   array-value)))
-          (unless (cl-typep (cl-map 'vector #'car kv-pairs) 'jmespath-array-of-orderables)
+        (let ((kv-pairs (seq-map #'(lambda (x)
+                                     (cons (jmespath-funeval-expression key-expr x) x))
+                                 array-value)))
+          (unless (cl-typep (jmespath-back-to-array (seq-map #'car kv-pairs)) 'jmespath-array-of-orderables)
             (signal 'jmespath-invalid-type-error (list 'max_by array-expr)))
-          (let ((pred (cond
-                       ((cl-typep (car (cl-first kv-pairs)) 'jmespath-json-string) #'string<)
-                       ((cl-typep (car (cl-first kv-pairs)) 'jmespath-json-number) #'<)
-                       (t (signal 'jmespath-invalid-type-error ())))))            
-            (cdr (cl-reduce #'(lambda (most x) (if (funcall pred (car most) (car x)) x most)) kv-pairs)))))))))
+          (seq-let (initial-pair &rest rest-pairs) kv-pairs
+            (let* ((pred (cond
+                          ((cl-typep (car initial-pair) 'jmespath-json-string) #'string<)
+                          ((cl-typep (car initial-pair) 'jmespath-json-number) #'<)
+                          (t (signal 'jmespath-invalid-type-error ()))))
+                   (accumulating #'(lambda (most x)
+                                     (if (funcall pred (car most) (car x))
+                                         x
+                                       most))))
+              (cdr (seq-reduce accumulating rest-pairs initial-pair))))))))))
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'merge)) function-args current)
   (cl-typecase function-args
@@ -1388,16 +1408,18 @@ call."
      ((zerop (length vals))
       :null)
      ((cl-typep (elt vals 0) 'jmespath-json-string)
-      (cl-reduce #'(lambda (a b) (if (string< a b) a b)) vals))
+      (seq-let (initial &rest rest) vals
+        (seq-reduce #'(lambda (a b) (if (string< a b) a b)) rest initial)))
      ((cl-typep (elt vals 0) 'jmespath-json-number)
-      (cl-reduce #'min vals)))))
+      (seq-let (initial &rest rest) vals
+        (seq-reduce #'min rest initial))))))
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'min_by)) function-args current)
   ;; Notice that we could use `jmespath-call-function-eval-args' for
   ;; 'min', but we can't for 'min_by'.  That's due to the 'key'
   ;; mechanism.  It requires us to evaluate and track the extracted
   ;; keys alongside the array values themselves.
-  (cl-destructuring-bind (array-expr key-expr) function-args
+  (seq-let (array-expr key-expr) function-args
     (let ((array-value (jmespath-ast-eval-with-current array-expr current)))
       (cond
        ((not (cl-typep key-expr 'jmespath-ast-quoted-expression))
@@ -1410,16 +1432,21 @@ call."
         ;; The name "kv-pairs" usually means "key/value pairs from a
         ;; dictionary".  Here, the left-hand part of the pair is "what
         ;; the key function returned for the right-hand side".
-        (let ((kv-pairs (cl-mapcar #'(lambda (x)
-                                       (cons (jmespath-funeval-expression key-expr x) x))
-                                   array-value)))
-          (unless (cl-typep (cl-map 'vector #'car kv-pairs) 'jmespath-array-of-orderables)
+        (let ((kv-pairs (seq-map #'(lambda (x)
+                                     (cons (jmespath-funeval-expression key-expr x) x))
+                                 array-value)))
+          (unless (cl-typep (jmespath-back-to-array (seq-map #'car kv-pairs)) 'jmespath-array-of-orderables)
             (signal 'jmespath-invalid-type-error (list 'min_by array-expr)))
-          (let ((pred (cond
-                       ((cl-typep (car (cl-first kv-pairs)) 'jmespath-json-string) #'string<)
-                       ((cl-typep (car (cl-first kv-pairs)) 'jmespath-json-number) #'<)
-                       (t (signal 'jmespath-invalid-type-error ())))))            
-            (cdr (cl-reduce #'(lambda (least x) (if (funcall pred (car x) (car least)) x least)) kv-pairs)))))))))
+          (seq-let (initial-pair &rest rest-pairs) kv-pairs
+            (let* ((pred (cond
+                          ((cl-typep (car initial-pair) 'jmespath-json-string) #'string<)
+                          ((cl-typep (car initial-pair) 'jmespath-json-number) #'<)
+                          (t (signal 'jmespath-invalid-type-error ()))))
+                   (accumulating #'(lambda (least x)
+                                     (if (funcall pred (car x) (car least))
+                                         x
+                                       least))))
+              (cdr (seq-reduce accumulating rest-pairs initial-pair))))))))))
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'not_null)) function-args current)
   (cl-check-type function-args jmespath-list-of-expressions)
@@ -1441,12 +1468,12 @@ call."
      ((zerop (length vals))
       (vector))
      ((cl-typep (elt vals 0) 'jmespath-json-string)
-      (cl-sort vals #'string<))
+      (seq-sort #'string< vals))
      ((cl-typep (elt vals 0) 'jmespath-json-number)
-      (cl-sort vals #'<)))))
+      (seq-sort #'< vals)))))
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'sort_by)) function-args current)
-  (cl-destructuring-bind (array-expr key-expr) function-args
+  (seq-let (array-expr key-expr) function-args
     (let ((array-value (jmespath-ast-eval-with-current array-expr current)))
       (cond
        ((not (cl-typep key-expr 'jmespath-ast-quoted-expression))
@@ -1456,16 +1483,17 @@ call."
        ((= (length array-value) 0)
         array-value)
        (t
-        (let ((kv-pairs (cl-mapcar #'(lambda (x)
-                                       (cons (jmespath-funeval-expression key-expr x) x))
-                                   array-value)))
-          (unless (cl-typep (cl-map 'vector #'car kv-pairs) 'jmespath-array-of-orderables)
+        (let ((kv-pairs (seq-map #'(lambda (x)
+                                     (cons (jmespath-funeval-expression key-expr x) x))
+                                 array-value)))
+          (unless (cl-typep (jmespath-back-to-array (seq-map #'car kv-pairs)) 'jmespath-array-of-orderables)
             (signal 'jmespath-invalid-type-error (list 'sort_by array-expr)))
-          (let ((pred (cond
-                       ((cl-typep (car (cl-first kv-pairs)) 'jmespath-json-string) #'string<)
-                       ((cl-typep (car (cl-first kv-pairs)) 'jmespath-json-number) #'<)
-                       (t (signal 'jmespath-invalid-type-error ())))))            
-            (cl-map 'vector #'cdr (cl-sort kv-pairs pred :key #'car)))))))))
+          (seq-let (initial-pair &rest _rest-pairs) kv-pairs
+            (let ((pred (cond
+                         ((cl-typep (car initial-pair) 'jmespath-json-string) #'string<)
+                         ((cl-typep (car initial-pair) 'jmespath-json-number) #'<)
+                         (t (signal 'jmespath-invalid-type-error ())))))
+              (jmespath-back-to-array (seq-map #'cdr (seq-sort-by #'car pred kv-pairs)))))))))))
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'starts_with)) function-args current)
   (jmespath-call-function-eval-args 'starts_with ((data jmespath-json-string) (candidate jmespath-json-string))
@@ -1480,7 +1508,7 @@ call."
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'sum)) function-args current)
   (jmespath-call-function-eval-args 'sum ((vals jmespath-array-of-numbers)) function-args current
-    (cl-reduce #'+ vals :initial-value 0)))
+    (seq-reduce #'+ vals 0)))
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'to_array)) function-args current)
   (jmespath-call-function-eval-args 'to_array ((val jmespath-json-value)) function-args current
@@ -1522,7 +1550,7 @@ call."
 
 (cl-defmethod jmespath-call-function ((_function-identifier (eql 'values)) function-args current)
   (jmespath-call-function-eval-args 'values ((val jmespath-json-object)) function-args current
-    (cl-coerce (jmespath-json-object-values val) 'vector)))
+    (jmespath-back-to-array (jmespath-json-object-values val))))
 
 
 ;;;;
@@ -2164,13 +2192,14 @@ call."
     ((jmespath-token-tag-LPAREN) (jmespath-parse-paren-expression))
     ((jmespath-token-tag-LITERAL) (jmespath-ast-literal :tree (jmespath-token-payload (jmespath-read-token))))
     ;; Note that rawstrings are just a convenient way to express
-    ;; literal JSON strings They don't need their own AST node type.
+    ;; literal JSON strings.  They don't need their own AST node type.
     ((jmespath-token-tag-RAWSTRING) (jmespath-ast-literal :tree (jmespath-token-payload (jmespath-read-token))))
     ((jmespath-token-tag-AT) (jmespath-drop-token) (jmespath-ast-current-node))
-    ;; We have explicit calls to `jmespath-ast-empty' here because the
-    ;; language structure assumes that these elements operate *on*
-    ;; something, and this context is the left-most part of an
-    ;; expression.  They operate implicitly on the current context.
+    ;; We have explicit calls to `jmespath-ast-empty' for the stuff
+    ;; below because the language structure assumes that these
+    ;; elements operate *on* something, and this context is the
+    ;; left-most part of an expression.  They operate implicitly on
+    ;; the current context.
     ((jmespath-token-tag-QUOTEDSTRING) (jmespath-parse-selector-identifier (jmespath-ast-empty)))
     ((jmespath-token-tag-UNQUOTEDSTRING) (jmespath-parse-selector-identifier/funcall (jmespath-ast-empty)))
     ((jmespath-token-tag-LBRACE) (jmespath-parse-multi-select-hash (jmespath-ast-empty)))
@@ -2335,9 +2364,12 @@ call."
   (jmespath-token-dispatch (idtok (jmespath-read-token))
       (jmespath-parse-error "expected one of QUOTEDSTRING, UNQUOTEDSTRING" idtok)
     ((jmespath-token-tag-QUOTEDSTRING)
+     ;; Quoted strings are always identifiers here.
      (jmespath-rollback-to-token idtok)
      (jmespath-parse-selector-identifier left-expr))
     ((jmespath-token-tag-UNQUOTEDSTRING)
+     ;; Unquoted strings followed by a left parenthesis are function
+     ;; calls.  Any other next token indicates an identifier.
      (jmespath-token-dispatch (parentok (jmespath-read-token))
          (progn
            (jmespath-rollback-to-token idtok)
